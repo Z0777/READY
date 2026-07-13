@@ -1,0 +1,223 @@
+# Botones de estatus — versión completa: registrar fechas de proceso + correo al BOA
+
+> Coma `,` = argumentos, `;` = encadenar.
+> **Requisitos ya hechos** (documento anterior): columna `BOAEmail`, `BOAEmail: R.BOAEmail` en `colTrz`, y en `App.Formulas`: `gloCCFijos` (3 en copia) y `gloMailDefault`.
+>
+> **Ajusta los nombres de tus columnas de fecha** si difieren. Aquí uso: `FechaSolicitud`, `FechaInicio`, `FechaFin`, `FechaEntrega`, `Estatus`, `'Requested Date'`. (En `colTrz` esas son `FSolicitud`, `FInicio`, `FFin`, `FEntrega`, `FReq`.)
+
+## Lógica de fechas (como la tenías)
+| Botón | Estatus | Registra | Limpia (si retrocedes) |
+|---|---|---|---|
+| Solicitado | "Solicitado" | — | inicio, fin, entrega |
+| En proceso | "En proceso" | inicio = ahora (si estaba vacía) | fin, entrega |
+| Finalizado | "Finalizado" | inicio + fin = ahora | entrega |
+| Entregado | "Entregado" | inicio + fin + entrega = ahora | — |
+
+`Coalesce(varReg.Fx, Now())` = si ya había fecha, la conserva; si no, pone la de ahora. Así no se pierde la fecha original al re-tocar el botón.
+
+---
+
+## Botón **SOLICITADO** → OnSelect
+```powerfx
+// 1) estatus + fechas (limpia inicio/fin/entrega)
+Patch(SOLICITUDESPA1, LookUp(SOLICITUDESPA1, ID = varReg.IDReg),
+    {
+        Estatus: "Solicitado",
+        FechaInicio: Blank(),
+        FechaFin: Blank(),
+        FechaEntrega: Blank()
+    }
+);
+// 2) refrescar tableros y el registro del drawer
+Select(btnBuildDash);
+Set(varReg, LookUp(colTrz, IDReg = varReg.IDReg));
+// 3) correo al BOA
+With(
+    { r: varReg, est: "Solicitado" },
+    With(
+        { filas: Table(
+            { k: "Set",               v: r.SetName },
+            { k: "Actividad",         v: r.Proceso },
+            { k: "Cultivo",           v: r.Crop },
+            { k: "Programa · Gen",    v: r.Program & " · " & r.Generation },
+            { k: "VCR",               v: r.VCR },
+            { k: "PEA",               v: r.PEA },
+            { k: "Área",              v: r.Area },
+            { k: "Fecha solicitada",  v: If(IsBlank(r.FSolicitud), "—", Text(r.FSolicitud, "dd/mm/yyyy")) },
+            { k: "Fecha inicio",      v: If(IsBlank(r.FInicio), "—", Text(r.FInicio, "dd/mm/yyyy")) },
+            { k: "Fecha finalizado",  v: If(IsBlank(r.FFin), "—", Text(r.FFin, "dd/mm/yyyy")) },
+            { k: "Fecha entrega",     v: If(IsBlank(r.FEntrega), "—", Text(r.FEntrega, "dd/mm/yyyy")) },
+            { k: "Fecha requerida",   v: If(IsBlank(r.FReq), "—", Text(r.FReq, "dd/mm/yyyy")) },
+            { k: "Prioridad",         v: r.Prioridad },
+            { k: "Solicitado por (BOA)", v: r.BOA },
+            { k: "Estatus",           v: est }
+        ) },
+        Office365Outlook.SendEmailV2(
+            Coalesce(r.BOAEmail, gloMailDefault),
+            "SPA · " & r.SetName & " → " & est,
+            "<div style='font-family:Segoe UI,Arial,sans-serif;color:#16273a;font-size:14px'>" &
+            "<p>Hola " & r.BOA & ", tu solicitud del set <b>" & r.SetName & "</b> (" & r.Proceso &
+                "), solicitada el <b>" & Text(r.FSolicitud, "dd/mm/yyyy") & "</b>, está en estatus <b>" & est & "</b>.</p>" &
+            "<table style='border-collapse:collapse;font-size:13px;min-width:360px'>" &
+            Concat(filas As F, "<tr><td style='padding:6px 12px;border:1px solid #e3eaf1;background:#f4f8fc;font-weight:600;color:#5a6b7b;white-space:nowrap'>" & F.k & "</td><td style='padding:6px 12px;border:1px solid #e3eaf1'>" & F.v & "</td></tr>") &
+            "</table><p style='font-size:12px;color:#93a4b4;margin-top:14px'>Mensaje automático · SPA Solicitudes · BTI Guatemala</p></div>",
+            { Cc: gloCCFijos }
+        )
+    )
+)
+```
+
+---
+
+## Botón **EN PROCESO** → OnSelect
+```powerfx
+Patch(SOLICITUDESPA1, LookUp(SOLICITUDESPA1, ID = varReg.IDReg),
+    {
+        Estatus: "En proceso",
+        FechaInicio: Coalesce(varReg.FInicio, Now()),
+        FechaFin: Blank(),
+        FechaEntrega: Blank()
+    }
+);
+Select(btnBuildDash);
+Set(varReg, LookUp(colTrz, IDReg = varReg.IDReg));
+With(
+    { r: varReg, est: "En proceso" },
+    With(
+        { filas: Table(
+            { k: "Set",               v: r.SetName },
+            { k: "Actividad",         v: r.Proceso },
+            { k: "Cultivo",           v: r.Crop },
+            { k: "Programa · Gen",    v: r.Program & " · " & r.Generation },
+            { k: "VCR",               v: r.VCR },
+            { k: "PEA",               v: r.PEA },
+            { k: "Área",              v: r.Area },
+            { k: "Fecha solicitada",  v: If(IsBlank(r.FSolicitud), "—", Text(r.FSolicitud, "dd/mm/yyyy")) },
+            { k: "Fecha inicio",      v: If(IsBlank(r.FInicio), "—", Text(r.FInicio, "dd/mm/yyyy")) },
+            { k: "Fecha finalizado",  v: If(IsBlank(r.FFin), "—", Text(r.FFin, "dd/mm/yyyy")) },
+            { k: "Fecha entrega",     v: If(IsBlank(r.FEntrega), "—", Text(r.FEntrega, "dd/mm/yyyy")) },
+            { k: "Fecha requerida",   v: If(IsBlank(r.FReq), "—", Text(r.FReq, "dd/mm/yyyy")) },
+            { k: "Prioridad",         v: r.Prioridad },
+            { k: "Solicitado por (BOA)", v: r.BOA },
+            { k: "Estatus",           v: est }
+        ) },
+        Office365Outlook.SendEmailV2(
+            Coalesce(r.BOAEmail, gloMailDefault),
+            "SPA · " & r.SetName & " → " & est,
+            "<div style='font-family:Segoe UI,Arial,sans-serif;color:#16273a;font-size:14px'>" &
+            "<p>Hola " & r.BOA & ", tu solicitud del set <b>" & r.SetName & "</b> (" & r.Proceso &
+                "), solicitada el <b>" & Text(r.FSolicitud, "dd/mm/yyyy") & "</b>, pasó a estatus <b>" & est & "</b>.</p>" &
+            "<table style='border-collapse:collapse;font-size:13px;min-width:360px'>" &
+            Concat(filas As F, "<tr><td style='padding:6px 12px;border:1px solid #e3eaf1;background:#f4f8fc;font-weight:600;color:#5a6b7b;white-space:nowrap'>" & F.k & "</td><td style='padding:6px 12px;border:1px solid #e3eaf1'>" & F.v & "</td></tr>") &
+            "</table><p style='font-size:12px;color:#93a4b4;margin-top:14px'>Mensaje automático · SPA Solicitudes · BTI Guatemala</p></div>",
+            { Cc: gloCCFijos }
+        )
+    )
+)
+```
+
+---
+
+## Botón **FINALIZADO** → OnSelect
+```powerfx
+Patch(SOLICITUDESPA1, LookUp(SOLICITUDESPA1, ID = varReg.IDReg),
+    {
+        Estatus: "Finalizado",
+        FechaInicio: Coalesce(varReg.FInicio, Now()),
+        FechaFin: Coalesce(varReg.FFin, Now()),
+        FechaEntrega: Blank()
+    }
+);
+Select(btnBuildDash);
+Set(varReg, LookUp(colTrz, IDReg = varReg.IDReg));
+With(
+    { r: varReg, est: "Finalizado" },
+    With(
+        { filas: Table(
+            { k: "Set",               v: r.SetName },
+            { k: "Actividad",         v: r.Proceso },
+            { k: "Cultivo",           v: r.Crop },
+            { k: "Programa · Gen",    v: r.Program & " · " & r.Generation },
+            { k: "VCR",               v: r.VCR },
+            { k: "PEA",               v: r.PEA },
+            { k: "Área",              v: r.Area },
+            { k: "Fecha solicitada",  v: If(IsBlank(r.FSolicitud), "—", Text(r.FSolicitud, "dd/mm/yyyy")) },
+            { k: "Fecha inicio",      v: If(IsBlank(r.FInicio), "—", Text(r.FInicio, "dd/mm/yyyy")) },
+            { k: "Fecha finalizado",  v: If(IsBlank(r.FFin), "—", Text(r.FFin, "dd/mm/yyyy")) },
+            { k: "Fecha entrega",     v: If(IsBlank(r.FEntrega), "—", Text(r.FEntrega, "dd/mm/yyyy")) },
+            { k: "Fecha requerida",   v: If(IsBlank(r.FReq), "—", Text(r.FReq, "dd/mm/yyyy")) },
+            { k: "Prioridad",         v: r.Prioridad },
+            { k: "Solicitado por (BOA)", v: r.BOA },
+            { k: "Estatus",           v: est }
+        ) },
+        Office365Outlook.SendEmailV2(
+            Coalesce(r.BOAEmail, gloMailDefault),
+            "SPA · " & r.SetName & " → " & est,
+            "<div style='font-family:Segoe UI,Arial,sans-serif;color:#16273a;font-size:14px'>" &
+            "<p>Hola " & r.BOA & ", tu solicitud del set <b>" & r.SetName & "</b> (" & r.Proceso &
+                "), solicitada el <b>" & Text(r.FSolicitud, "dd/mm/yyyy") & "</b>, pasó a estatus <b>" & est & "</b>.</p>" &
+            "<table style='border-collapse:collapse;font-size:13px;min-width:360px'>" &
+            Concat(filas As F, "<tr><td style='padding:6px 12px;border:1px solid #e3eaf1;background:#f4f8fc;font-weight:600;color:#5a6b7b;white-space:nowrap'>" & F.k & "</td><td style='padding:6px 12px;border:1px solid #e3eaf1'>" & F.v & "</td></tr>") &
+            "</table><p style='font-size:12px;color:#93a4b4;margin-top:14px'>Mensaje automático · SPA Solicitudes · BTI Guatemala</p></div>",
+            { Cc: gloCCFijos }
+        )
+    )
+)
+```
+
+---
+
+## Botón **ENTREGADO** → OnSelect
+```powerfx
+Patch(SOLICITUDESPA1, LookUp(SOLICITUDESPA1, ID = varReg.IDReg),
+    {
+        Estatus: "Entregado",
+        FechaInicio: Coalesce(varReg.FInicio, Now()),
+        FechaFin: Coalesce(varReg.FFin, Now()),
+        FechaEntrega: Coalesce(varReg.FEntrega, Now())
+    }
+);
+Select(btnBuildDash);
+Set(varReg, LookUp(colTrz, IDReg = varReg.IDReg));
+With(
+    { r: varReg, est: "Entregado" },
+    With(
+        { filas: Table(
+            { k: "Set",               v: r.SetName },
+            { k: "Actividad",         v: r.Proceso },
+            { k: "Cultivo",           v: r.Crop },
+            { k: "Programa · Gen",    v: r.Program & " · " & r.Generation },
+            { k: "VCR",               v: r.VCR },
+            { k: "PEA",               v: r.PEA },
+            { k: "Área",              v: r.Area },
+            { k: "Fecha solicitada",  v: If(IsBlank(r.FSolicitud), "—", Text(r.FSolicitud, "dd/mm/yyyy")) },
+            { k: "Fecha inicio",      v: If(IsBlank(r.FInicio), "—", Text(r.FInicio, "dd/mm/yyyy")) },
+            { k: "Fecha finalizado",  v: If(IsBlank(r.FFin), "—", Text(r.FFin, "dd/mm/yyyy")) },
+            { k: "Fecha entrega",     v: If(IsBlank(r.FEntrega), "—", Text(r.FEntrega, "dd/mm/yyyy")) },
+            { k: "Fecha requerida",   v: If(IsBlank(r.FReq), "—", Text(r.FReq, "dd/mm/yyyy")) },
+            { k: "Prioridad",         v: r.Prioridad },
+            { k: "Solicitado por (BOA)", v: r.BOA },
+            { k: "Estatus",           v: est }
+        ) },
+        Office365Outlook.SendEmailV2(
+            Coalesce(r.BOAEmail, gloMailDefault),
+            "SPA · " & r.SetName & " → " & est,
+            "<div style='font-family:Segoe UI,Arial,sans-serif;color:#16273a;font-size:14px'>" &
+            "<p>Hola " & r.BOA & ", tu solicitud del set <b>" & r.SetName & "</b> (" & r.Proceso &
+                "), solicitada el <b>" & Text(r.FSolicitud, "dd/mm/yyyy") & "</b>, fue <b>" & est & "</b>.</p>" &
+            "<table style='border-collapse:collapse;font-size:13px;min-width:360px'>" &
+            Concat(filas As F, "<tr><td style='padding:6px 12px;border:1px solid #e3eaf1;background:#f4f8fc;font-weight:600;color:#5a6b7b;white-space:nowrap'>" & F.k & "</td><td style='padding:6px 12px;border:1px solid #e3eaf1'>" & F.v & "</td></tr>") &
+            "</table><p style='font-size:12px;color:#93a4b4;margin-top:14px'>Mensaje automático · SPA Solicitudes · BTI Guatemala</p></div>",
+            { Cc: gloCCFijos }
+        )
+    )
+)
+```
+
+---
+
+## Notas
+- **Nombres de columnas de fecha:** cambia `FechaInicio / FechaFin / FechaEntrega` por los reales de tu lista si difieren. En `colTrz` esas mismas fechas son `FInicio / FFin / FEntrega` (por eso el `Coalesce(varReg.FInicio, Now())` lee el valor actual antes de sobrescribir).
+- **Orden importa:** el `Patch` va primero (usa `varReg` con las fechas viejas para el `Coalesce`), luego `Select(btnBuildDash)` reconstruye `colTrz`, luego `Set(varReg, LookUp(...))` deja `varReg` con las fechas nuevas, y por último el correo (que ya muestra las fechas actualizadas).
+- **Fecha requerida:** no la toco aquí; sigue viniendo de `'Requested Date'` y solo cambia al reprogramar.
+- **Correo de respaldo:** `Coalesce(r.BOAEmail, gloMailDefault)` cubre registros viejos sin `BOAEmail`.
