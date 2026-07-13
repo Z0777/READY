@@ -1,0 +1,115 @@
+# Flujo Power Automate — Sincronizar Global Shipping (Guatemala) → SOLICITUDESPA1
+
+## Idea general
+Como los Request ID **no se llenan de una sola vez** (les agregan info con el tiempo), no sirve un flujo que solo dispare "al crearse". Mejor un **flujo programado cada X horas** que haga **upsert**:
+- Trae de *Global Shipping Requests* **solo los de Guatemala**.
+- Por cada Request ID: si **ya existe** en SOLICITUDESPA1 → lo **actualiza** (captura la info nueva). Si **no existe** → lo **crea**.
+- **No toca** los campos del flujo de trabajo (Estatus, FechaInicio/Fin/Entrega, BOAEmail, adjuntos): esos son de tu app.
+
+---
+
+## Requisito previo (1 columna llave)
+En **SOLICITUDESPA1**, crea una columna de texto para guardar el ID de origen:
+- **GSR_RequestID** (una sola línea de texto).
+
+Es la **llave** para saber si un envío de Guatemala ya fue traído. (Si ya tienes una columna que guarda el Request ID, úsala y ajusta el nombre en el flujo.)
+
+---
+
+## Construcción del flujo
+
+### 1. Desencadenador — Periodicidad (Recurrence)
+- Buscar: **Recurrence** (Programación).
+- Intervalo: **2** · Frecuencia: **Hora**. (ajústalo: 1, 2, 4 h…)
+
+### 2. Obtener elementos — Global Shipping (solo Guatemala)
+Acción **SharePoint → Obtener elementos**:
+- **Dirección del sitio:** el sitio de Global Shipping.
+- **Lista:** *Global Shipping Requests*.
+- **Consulta de filtro (Filter Query):**
+  ```
+  Country eq 'Guatemala'
+  ```
+  > Cambia `Country` por el nombre **interno** real de tu columna de país/destino (p. ej. `Destination_x0020_Country`). Si el país es una columna de elección, el filtro suele ser igual: `Country eq 'Guatemala'`.
+- (Opcional) **Umbral de elementos** y activar **Paginación** en Configuración de la acción si son más de 100 filas.
+
+### 3. Aplicar a cada uno (Apply to each)
+- **Salida:** el `value` del paso 2 (Obtener elementos de Global Shipping).
+
+Dentro del bucle:
+
+#### 3a. Obtener elementos — SOLICITUDESPA1 (¿ya existe?)
+Acción **SharePoint → Obtener elementos**:
+- **Lista:** SOLICITUDESPA1.
+- **Consulta de filtro:**
+  ```
+  GSR_RequestID eq '@{items('Apply_to_each')?['RequestID']}'
+  ```
+  > Cambia `RequestID` por el nombre interno del campo Request ID en Global Shipping.
+- **Top count:** 1.
+
+#### 3b. Condición — ¿existe?
+Agrega **Condición**. Expresión del lado izquierdo:
+```
+length(body('Obtener_elementos_SPA')?['value'])
+```
+Operador **es mayor que** · valor **0**.
+> Ajusta `Obtener_elementos_SPA` al nombre real de tu acción 3a.
+
+**Rama "En caso afirmativo" (ya existe → ACTUALIZAR):**
+Acción **SharePoint → Actualizar elemento** en SOLICITUDESPA1:
+- **Id.:**
+  ```
+  first(body('Obtener_elementos_SPA')?['value'])?['ID']
+  ```
+- Mapea **solo** los campos que vienen de shipping (ver tabla abajo). **No** pongas Estatus ni fechas de proceso ni BOAEmail aquí.
+
+**Rama "En caso negativo" (no existe → CREAR):**
+Acción **SharePoint → Crear elemento** en SOLICITUDESPA1:
+- Mapea los campos de shipping **+** los valores iniciales del flujo de trabajo:
+  - `GSR_RequestID` = Request ID de Global Shipping.
+  - `Estatus` = `"Solicitado"`.
+  - `FechaSolicitud` = Created Date del envío.
+  - `BOAEmail` = (déjalo vacío o pon un correo por defecto; el BOA no aplica cuando lo crea el flujo).
+
+---
+
+## Mapeo de campos (ajusta a tus nombres internos)
+
+| SOLICITUDESPA1 | ← Global Shipping Requests |
+|---|---|
+| `GSR_RequestID` | Request ID |
+| `SetName` | Set / Material |
+| `Actividad` | (fija según tipo, p. ej. "Envio de semillas") |
+| `Crop` | Crop / Cultivo |
+| `FechaSolicitud` | **Created Date** |
+| `'Requested Date'` | **Requested Ship Date** |
+| `Program` / `Generation` / `VCR` … | sus equivalentes |
+| `Estatus` (solo al **crear**) | fijo `"Solicitado"` |
+
+> **Al ACTUALIZAR** mapea únicamente los campos de la izquierda que provienen de shipping. **Nunca** incluyas `Estatus`, `FechaInicio`, `FechaFin`, `FechaEntrega` ni `BOAEmail` en la rama de actualizar, para no pisar lo que hacen los usuarios en la app.
+
+---
+
+## Puntos importantes
+- **Por qué programado y no "al crear":** como la fila de Global Shipping se va completando por partes, un trigger "al crearse" guardaría datos incompletos. El programado re-lee cada corrida y va completando lo que falte (upsert).
+- **Evitar duplicados:** todo depende de que `GSR_RequestID` se llene bien al crear. La condición del 3b es la que impide crear dos veces el mismo.
+- **Concurrencia:** en el *Apply to each* → Configuración, deja **Grado de concurrencia** en 1 si quieres máxima seguridad contra duplicados (más lento pero sin choques).
+- **Reconstruir tableros de la app:** el flujo escribe directo en SharePoint; tu app reconstruye `colTrz` al abrir la pantalla (OnVisible → `btnBuildDash`), así que verá los nuevos/actualizados al recargar.
+
+---
+
+## Alternativa casi en tiempo real (opcional)
+Si prefieres que reaccione al instante en vez de cada hora:
+- Trigger **SharePoint → Cuando se crea o modifica un elemento** sobre *Global Shipping Requests*.
+- En **Configuración del trigger → Condición de desencadenador**, filtra Guatemala:
+  ```
+  @equals(triggerOutputs()?['body/Country/Value'], 'Guatemala')
+  ```
+  (ajusta la ruta al tipo de tu columna país).
+- El resto (3a existencia → 3b crear/actualizar) es igual. Dispara con cada cambio, así que captura la info incremental apenas la agregan.
+
+## Resumen
+1. Columna `GSR_RequestID` en SOLICITUDESPA1.
+2. Flujo *Recurrence* cada 2 h → Obtener Global Shipping (Guatemala) → por cada uno, existencia por `GSR_RequestID` → crear o actualizar.
+3. Al **actualizar**, solo campos de shipping (preserva Estatus, fechas y BOAEmail de la app).
