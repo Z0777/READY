@@ -1,0 +1,190 @@
+# Correo al BOA por cada estatus + columna BOAEmail + icono Eliminar
+
+> Coma `,` = argumentos, `;` = encadenar. Todo listo para copiar.
+
+---
+
+# PARTE 1 — Guardar el correo del BOA en una columna nueva
+
+El correo de estatus debe llegarle al **BOA que creó la solicitud** (aunque el estatus lo cambie otra persona). Por eso hay que **guardar su correo al crear** cada solicitud.
+
+## 1.1 — Crear la columna en SharePoint
+En la lista **SOLICITUDESPA1**, crea una columna:
+- Nombre: **BOAEmail** (una sola línea de texto).
+
+> Si también guardas exportaciones en **EXPORT-IMPORT** y quieres el correo ahí, créala igual en esa lista.
+
+## 1.2 — Guardar el correo al crear la solicitud
+En **cada** `Patch`/`SubmitForm` que crea un registro en SOLICITUDESPA1, agrega este campo al registro:
+```powerfx
+BOAEmail: User().Email
+```
+Puntos donde creas solicitudes (agrega el campo en todos):
+- El botón **Guardar** del wizard (siembra / colecta).
+- `Icon9` (envío de semilla) — dentro del `Patch(SOLICITUDESPA1; ...)`.
+- `Icon13` (envío de tejido) — dentro del `Patch(SOLICITUDESPA1; ...)`.
+
+Ejemplo (cómo queda un fragmento del Patch de Icon9):
+```powerfx
+Patch(SOLICITUDESPA1, Defaults(SOLICITUDESPA1),
+    { Actividad: varActividadSeleccionada, SetName: ThisItem.SetName, /* ...tus campos... */
+      Estatus: "Solicitado", BOA: gloUsuario,
+      BOAEmail: User().Email }
+)
+```
+> `User().Email` = correo del usuario que está usando la app (el BOA). Si en tu app el BOA se **elige de una lista** en vez de ser el usuario actual, guarda el correo del seleccionado (p. ej. `Office365Users.UserProfileV2(gloBoaId).Mail`) en lugar de `User().Email`.
+
+## 1.3 — Llevar el campo a `colTrz` (btnBuildDash)
+En `btnBuildDash.OnSelect`, dentro del registro que arma `colTrz` (junto a `BOA`, `SetName`, etc.), agrega:
+```powerfx
+BOAEmail: R.BOAEmail,
+```
+Así `varReg.BOAEmail` estará disponible al enviar el correo.
+
+---
+
+# PARTE 2 — Configurar destinatarios (TO = BOA, CC = 3 fijos)
+
+**Control:** `App` → **Formulas**. Agrega (con los correos reales):
+```powerfx
+// CC: SIEMPRE estas 3 personas (separadas por ; )
+gloCCFijos = "persona1@bayer.com;persona2@bayer.com;persona3@bayer.com";
+// Respaldo si un registro viejo no tiene BOAEmail guardado
+gloMailDefault = "coordinacion.spa@bayer.com";
+```
+
+---
+
+# PARTE 3 — El bloque de correo (TO = BOA)
+
+Va en el **OnSelect de cada botón de estatus**, al final (después del Patch y del refresco de `varReg`). Cambia solo `est` en cada botón.
+
+```powerfx
+With(
+    { r: varReg, est: "En proceso" },   // <-- cambia 'est' por botón
+    With(
+        { filas: Table(
+            { k: "Set",               v: r.SetName },
+            { k: "Actividad",         v: r.Proceso },
+            { k: "Cultivo",           v: r.Crop },
+            { k: "Programa · Gen",    v: r.Program & " · " & r.Generation },
+            { k: "VCR",               v: r.VCR },
+            { k: "PEA",               v: r.PEA },
+            { k: "Área",              v: r.Area },
+            { k: "Fecha solicitada",  v: Text(r.FSolicitud, "dd/mm/yyyy") },
+            { k: "Fecha requerida",   v: Text(r.FReq, "dd/mm/yyyy") },
+            { k: "Prioridad",         v: r.Prioridad },
+            { k: "Solicitado por (BOA)", v: r.BOA },
+            { k: "Estatus",           v: est }
+        ) },
+        Office365Outlook.SendEmailV2(
+            // TO — el BOA que creó la solicitud
+            Coalesce(r.BOAEmail, gloMailDefault),
+            // ASUNTO
+            "SPA · " & r.SetName & " → " & est,
+            // CUERPO (HTML)
+            "<div style='font-family:Segoe UI,Arial,sans-serif;color:#16273a;font-size:14px'>" &
+            "<p>Hola " & r.BOA & ", tu solicitud del set <b>" & r.SetName & "</b> (" & r.Proceso &
+                "), solicitada el <b>" & Text(r.FSolicitud, "dd/mm/yyyy") & "</b>, cambió a estatus <b>" & est & "</b>.</p>" &
+            "<table style='border-collapse:collapse;font-size:13px;min-width:360px'>" &
+            Concat(filas As F,
+                "<tr>" &
+                "<td style='padding:6px 12px;border:1px solid #e3eaf1;background:#f4f8fc;font-weight:600;color:#5a6b7b;white-space:nowrap'>" & F.k & "</td>" &
+                "<td style='padding:6px 12px;border:1px solid #e3eaf1'>" & F.v & "</td>" &
+                "</tr>"
+            ) &
+            "</table>" &
+            "<p style='font-size:12px;color:#93a4b4;margin-top:14px'>Mensaje automático · SPA Solicitudes · BTI Guatemala</p>" &
+            "</div>",
+            // CC — 3 personas fijas
+            { Cc: gloCCFijos }
+        )
+    )
+)
+```
+
+**En cada botón cambia solo `est`:**
+- **Solicitado** → `est: "Solicitado"`
+- **En proceso** → `est: "En proceso"`
+- **Finalizado** → `est: "Finalizado"`
+- **Entregado** → `est: "Entregado"`
+
+Colócalo **después** de `Set(varReg, LookUp(colTrz, IDReg = varReg.IDReg))` para que los datos estén frescos.
+
+> `Coalesce(r.BOAEmail, gloMailDefault)`: si un registro viejo no tiene el correo guardado, el aviso cae en el correo de respaldo en vez de fallar.
+
+---
+
+# PARTE 4 — Icono Eliminar en `Container33`
+
+## 4.1 — Insertar el icono
+Selecciona `Container33` → Insertar → **Icono** → **Trash** (papelera). Renómbralo `icoDeleteSol`.
+
+**`icoDeleteSol`**
+| Propiedad | Valor |
+|---|---|
+| `Icon` | `=Icon.Trash` |
+| `Color` | `=RGBA(211, 84, 66, 1)` |
+| `Tooltip` | `="Eliminar solicitud"` |
+| `Width` / `Height` | `=28` / `=28` |
+| `OnSelect` | `=Set(varConfirmDel, true)` |
+
+## 4.2 — Popup de confirmación (para no borrar por accidente)
+Crea un contenedor **a nivel de pantalla** (hijo de `procesos01`, hermano de `conDrawer`): `conConfirmDel`.
+
+**`conConfirmDel`** (GroupContainer · ManualLayout)
+| Propiedad | Valor |
+|---|---|
+| `X` / `Y` | `=0` / `=0` |
+| `Width` / `Height` | `=Parent.Width` / `=Parent.Height` |
+| `Fill` | `=RGBA(16, 30, 44, 0.45)` |
+| `Visible` | `=varConfirmDel` |
+
+Dentro, una tarjeta centrada `cardConfirmDel` (GroupContainer vertical):
+| Propiedad | Valor |
+|---|---|
+| `Width` | `=360` |
+| `Height` | `=180` |
+| `X` | `=(Parent.Width - Self.Width) / 2` |
+| `Y` | `=(Parent.Height - Self.Height) / 2` |
+| `Fill` | `=RGBA(255, 255, 255, 1)` |
+| `LayoutGap` | `=10` |
+| `PaddingTop`/`Bottom`/`Left`/`Right` | `=18` |
+
+Dentro de `cardConfirmDel`:
+- **`lblConfTit`** (Etiqueta): `Text = "¿Eliminar esta solicitud?"`, `FontWeight = Bold`, `Size = 15`.
+- **`lblConfSub`** (Etiqueta): `Text = "El set " & varReg.SetName & " se eliminará de SOLICITUDESPA1. Esta acción no se puede deshacer."`, `Size = 12`, `Color = RGBA(90, 107, 123, 1)`.
+- **`rowConfBtns`** (contenedor horizontal, `LayoutGap = 10`, `AlignInContainer = Stretch`):
+  - **`btnConfCancel`** (Botón): `Text = "Cancelar"`, `OnSelect = Set(varConfirmDel, false)`.
+  - **`btnConfDelete`** (Botón): `Text = "Eliminar"`, `Fill = RGBA(211, 84, 66, 1)`, `OnSelect`:
+```powerfx
+Remove(SOLICITUDESPA1, LookUp(SOLICITUDESPA1, ID = varReg.IDReg));
+Set(varConfirmDel, false);
+Set(varDrawerOpen, false);
+Select(btnBuildDash);
+Notify("Solicitud eliminada", NotificationType.Success)
+```
+
+## 4.3 — Inicializar la variable
+En `procesos01.OnVisible` agrega:
+```powerfx
+Set(varConfirmDel, false);
+```
+
+> **Exportaciones:** si el set también existe en `EXPORT-IMPORT` y quieres borrarlo de ambas, agrega antes del `Remove` de SOLICITUDESPA1:
+> ```powerfx
+> Remove('EXPORT-IMPORT', LookUp('EXPORT-IMPORT', SET = varReg.SetName And Request_ID = varReg.RequestID));
+> ```
+> Solo si tienes una clave confiable (SET + Request_ID) para no borrar el registro equivocado. Si no, deja solo el de SOLICITUDESPA1.
+
+---
+
+# Resumen
+- **SharePoint:** columna nueva `BOAEmail` en SOLICITUDESPA1.
+- **Creación:** agregar `BOAEmail: User().Email` a cada Patch de nueva solicitud.
+- **btnBuildDash:** agregar `BOAEmail: R.BOAEmail` a `colTrz`.
+- **App.Formulas:** `gloCCFijos` (3 en copia) y `gloMailDefault` (respaldo).
+- **4 botones de estatus:** pegar el bloque de correo (TO = `varReg.BOAEmail`), cambiando solo `est`.
+- **Container33:** icono `icoDeleteSol` + popup `conConfirmDel` para eliminar la solicitud.
+
+
