@@ -1,0 +1,20 @@
+Sort(
+    Filter(
+        DATASUMMARY1;
+        (
+            gloAreaRec.Tipos.Value in ["Nursery"; "Semillero"; "Semilleros"; "SPA"; "Procesos"]
+            || Text(Greenhouse) = Text(gloAreaKey)
+        )
+        && (
+            txtBuscarSet1.Text = ""
+            || StartsWith(SetName; txtBuscarSet1.Text)
+            || StartsWith(Program.Value; txtBuscarSet1.Text)
+            || StartsWith(TrialIntent.Value; txtBuscarSet1.Text)
+            || StartsWith(MCT.Value; txtBuscarSet1.Text)
+            || StartsWith(Field; txtBuscarSet1.Text)
+            || StartsWith(VCR; txtBuscarSet1.Text)
+        )
+    );
+    SetName;
+    SortOrder.Ascending
+)
