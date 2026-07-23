@@ -1,0 +1,248 @@
+Encontré la causa. Es culpa mía: en la ronda anterior te dije que borraras las variables de filtro del OnStart (§2.4), pero los PieChart siguen referenciándolas. Una variable inexistente invalida toda la fórmula Items → el gráfico no renderiza.
+
+Y hay un segundo problema encima: los nombres tienen typos que nunca existieron ni siquiera antes — varFiltroCategoria**s** (plural) y varFiltroTypeBoget**s** (con s). Esos dos nunca fueron variables válidas.
+
+1. La solución: los pies leen los combos, igual que la galería
+
+Misma regla que aplicamos a las galerías: nada de variables globales para filtros de barra. Cada pie lee directamente los combos de conFiltros_1, así siguen al Dashboard y no se contaminan con la barra de Requests.
+
+1.1 App › OnStart — solo agregar las variables de drill
+
+Estas son nuevas y sirven únicamente para el cross-filter (clic en el pastel → filtra abajo). No son las que borramos:
+
+Set(varDrillSite; "");;
+Set(varDrillPrioridad; "");;
+Set(varDrillCategoria; "");;
+Set(varDrillEstado; "")
+1.2 PesSites › PieChart2 · Items
+=With(
+    {
+        colF: Filter(colProyectos;
+            Status.Value in varEstadosEjecutan
+            And (IsBlank(cmbFSite_1.Selected.SiteName) Or SiteName.Value = cmbFSite_1.Selected.SiteName)
+            And (IsBlank(cmbFCategoria_1.Selected.Value) Or SpendingCategory.Value = cmbFCategoria_1.Selected.Value)
+            And (IsBlank(cmbFPrioridad_1.Selected.Value) Or Priority.Value = cmbFPrioridad_1.Selected.Value)
+            And (IsBlank(cmbFTipoBudget_1.Selected.Value) Or BudgetType.Value = cmbFTipoBudget_1.Selected.Value)
+            And (IsBlank(cmbFAño_1.Selected.Value) Or ExecutionYear = cmbFAño_1.Selected.Value)
+            And (varDrillPrioridad = "" Or Priority.Value = varDrillPrioridad)
+            And (varDrillCategoria = "" Or SpendingCategory.Value = varDrillCategoria)
+            And (varDrillEstado = "" Or Status.Value = varDrillEstado)
+        )
+    };
+    With(
+        {total: Coalesce(Sum(colF; ApprovedCost); 0)};
+        Filter(
+            ForAll(colSite As s;
+                With(
+                    {costo: Coalesce(Sum(Filter(colF; SiteName.Value = s.SiteName); ApprovedCost); 0)};
+                    {
+                        Etiqueta: s.SiteName & " (" & Round(costo / Max(1; total) * 100; 1) & "%)";
+                        Valor: costo;
+                        Clave: s.SiteName
+                    }
+                )
+            );
+            Valor > 0
+        )
+    )
+)
+
+Otras propiedades del mismo control:
+
+Propiedad	Valor
+Items.Labels	=Etiqueta
+Items.Series	=Valor
+OnSelect	=Set(varDrillSite; If(varDrillSite = Self.Selected.Clave; ""; Self.Selected.Clave))
+
+El OnSelect es un toggle: primer clic filtra por ese sitio, segundo clic sobre el mismo lo quita.
+
+Fíjate que el colF de este pie incluye varDrillPrioridad, varDrillCategoria y varDrillEstado pero no varDrillSite. Es a propósito: si un pie se filtrara por su propia dimensión, al hacer clic se colapsaría a una sola rebanada. Cada pie ignora su propio drill y respeta los de los otros tres. Eso es lo que da la sensación de dashboard.
+
+1.3 Los otros tres pies
+
+Misma estructura. Solo cambian cuatro cosas:
+
+Gráfico	Drill que omite en colF	ForAll sobre	Columna que agrupa	OnSelect
+PerPriority › PieChart2_1	varDrillPrioridad	["Emergency";"Urgent";"Normal";"Low"]	Priority.Value	=Set(varDrillPrioridad; If(varDrillPrioridad = Self.Selected.Clave; ""; Self.Selected.Clave))
+PerStatus › PieChart2_2	varDrillEstado	varEstadosEjecutan	Status.Value	=Set(varDrillEstado; If(varDrillEstado = Self.Selected.Clave; ""; Self.Selected.Clave))
+PerCategory › PieChart2_3	varDrillCategoria	["Pipeline";"Growth";"Maintenances";"Safety/External compliance"]	SpendingCategory.Value	=Set(varDrillCategoria; If(varDrillCategoria = Self.Selected.Clave; ""; Self.Selected.Clave))
+
+Ejemplo completo del de Priority (PerPriority › PieChart2_1 · Items) para que veas el patrón sobre una lista de texto en vez de colSite:
+
+=With(
+    {
+        colF: Filter(colProyectos;
+            Status.Value in varEstadosEjecutan
+            And (IsBlank(cmbFSite_1.Selected.SiteName) Or SiteName.Value = cmbFSite_1.Selected.SiteName)
+            And (IsBlank(cmbFCategoria_1.Selected.Value) Or SpendingCategory.Value = cmbFCategoria_1.Selected.Value)
+            And (IsBlank(cmbFPrioridad_1.Selected.Value) Or Priority.Value = cmbFPrioridad_1.Selected.Value)
+            And (IsBlank(cmbFTipoBudget_1.Selected.Value) Or BudgetType.Value = cmbFTipoBudget_1.Selected.Value)
+            And (IsBlank(cmbFAño_1.Selected.Value) Or ExecutionYear = cmbFAño_1.Selected.Value)
+            And (varDrillSite = "" Or SiteName.Value = varDrillSite)
+            And (varDrillCategoria = "" Or SpendingCategory.Value = varDrillCategoria)
+            And (varDrillEstado = "" Or Status.Value = varDrillEstado)
+        )
+    };
+    With(
+        {total: Coalesce(Sum(colF; ApprovedCost); 0)};
+        Filter(
+            ForAll(["Emergency"; "Urgent"; "Normal"; "Low"] As p;
+                With(
+                    {costo: Coalesce(Sum(Filter(colF; Priority.Value = p.Value); ApprovedCost); 0)};
+                    {
+                        Etiqueta: p.Value & " (" & Round(costo / Max(1; total) * 100; 1) & "%)";
+                        Valor: costo;
+                        Clave: p.Value
+                    }
+                )
+            );
+            Valor > 0
+        )
+    )
+)
+1.4 Leyendas y títulos
+Control	Propiedad	Valor
+Legend2 (y _1, _2, _3)	Items	=PieChart2.SeriesLabels (ajusta el número)
+⤷	Items.Value	=Value
+⤷	ItemColorSet	=PieChart2.ItemColorSet
+Title2	Text / Visible	="% Approved by Site" / =true
+Title2_1	Text	="% Approved by Priority"
+Title2_2	Text	="% Approved by Status"
+Title2_3	Text	="% Approved by Spending Category"
+
+La leyenda ya no necesita agregar el % porque viene dentro de Etiqueta.
+
+2. El cross-filter hacia la galería inferior
+2.1 Un problema real que hay que decidir
+
+galApproval filtra solo Status.Value = "Site Verification". Los pies muestran varEstadosEjecutan (Approved en adelante). Son conjuntos disjuntos: ningún proyecto está en ambos.
+
+Consecuencia práctica:
+
+Drill por Site / Priority / Category → sí funciona sobre galApproval (son dimensiones ortogonales al estatus).
+Drill por Status → siempre daría cero resultados. No lo apliques a galApproval.
+
+Por eso abajo dejo el drill de estatus afectando solo a los otros gráficos.
+
+2.2 conSolicitudes_1 › galApproval · Items
+
+Agrega las tres líneas de drill al filtro que ya tienes:
+
+=SortByColumns(
+    Filter(colProyectos;
+        Status.Value = "Site Verification"
+        And (IsBlank(cmbFSite_1.Selected.SiteName) Or SiteName.Value = cmbFSite_1.Selected.SiteName)
+        And (IsBlank(cmbFCategoria_1.Selected.Value) Or SpendingCategory.Value = cmbFCategoria_1.Selected.Value)
+        And (IsBlank(cmbFTipoBudget_1.Selected.Value) Or BudgetType.Value = cmbFTipoBudget_1.Selected.Value)
+        And (IsBlank(cmbFPrioridad_1.Selected.Value) Or Priority.Value = cmbFPrioridad_1.Selected.Value)
+        And (IsBlank(cmbFAño_1.Selected.Value) Or ExecutionYear = cmbFAño_1.Selected.Value)
+        And (varDrillSite = "" Or SiteName.Value = varDrillSite)
+        And (varDrillPrioridad = "" Or Priority.Value = varDrillPrioridad)
+        And (varDrillCategoria = "" Or SpendingCategory.Value = varDrillCategoria)
+        And (txtBuscarApr.Text = "" Or StartsWith(ProjectName; txtBuscarApr.Text) Or StartsWith(ProjectNumber; txtBuscarApr.Text))
+    );
+    "Created"; SortOrder.Descending
+)
+2.3 Indicador y botón de limpiar drill
+
+Agrega en Graficas (o justo encima de la galería) un Label lblDrillActivo:
+
+Text:
+=If(
+    varDrillSite = "" And varDrillPrioridad = "" And varDrillCategoria = "" And varDrillEstado = "";
+    "";
+    "Filtered by:  " &
+    If(varDrillSite = ""; ""; "Site = " & varDrillSite & "   ") &
+    If(varDrillPrioridad = ""; ""; "Priority = " & varDrillPrioridad & "   ") &
+    If(varDrillCategoria = ""; ""; "Category = " & varDrillCategoria & "   ") &
+    If(varDrillEstado = ""; ""; "Status = " & varDrillEstado)
+)
+Color:   =clrVerdeFg
+Visible: =Not (varDrillSite = "" And varDrillPrioridad = "" And varDrillCategoria = "" And varDrillEstado = "")
+
+Y un Classic/Button btnLimpiarDrill al lado:
+
+Text:     ="✕ Clear chart filter"
+Visible:  =lblDrillActivo.Visible
+OnSelect: =Set(varDrillSite; "");; Set(varDrillPrioridad; "");; Set(varDrillCategoria; "");; Set(varDrillEstado; "")
+
+Sin esto, un usuario hace clic en una rebanada, no entiende por qué la galería se vació, y no tiene cómo revertirlo.
+
+3. Dos verificaciones antes de pegar
+
+Los nombres de los combos. Usé cmbFSite_1, cmbFCategoria_1, cmbFTipoBudget_1, cmbFPrioridad_1, cmbFAño_1, txtBuscarApr (los que propuse la ronda pasada). Si en tu árbol se llaman distinto — en YAML previos vi cosas como cmbFEst01 — sustitúyelos por los reales, o vas a tener el mismo error de identificador no reconocido, solo que ahora en los combos.
+
+SiteName vs Site. En tus capturas SiteName.Value no sale subrayado en rojo mientras las variables sí, así que asumo que renombraste la columna en SharePoint y ahora es SiteName. Por eso todo el código de arriba usa SiteName.Value. Si en algún control te marca error ahí, es que esa parte quedó como Site — unifica en SharePoint, no en las fórmulas.
+s un error mío: cuando renombramos los estatus te dije que reemplazaras Pre-planning → Not Started, pero no te di la lista de dónde quedaba "Site ops Validation". Ese botón todavía compara contra el texto viejo.
+
+La causa
+
+El botón tiene una fórmula del tipo:
+
+Text: =If(ThisItem.Status.Value = "Site ops Validation"; "Approve"; "✓ Approved")
+
+Como en SharePoint ese valor ya no existe (ahora es Site Verification), la condición es siempre falsa → cae a la rama else → muestra "✓ Approved" en verde. Lo mismo le pasa a Fill, Color y DisplayMode: todos creen que el proyecto ya está aprobado.
+
+No es que el flujo esté mal. El 10Button5 de galSol funcionó perfecto (el proyecto pasó a Site Verification y cruzó de bandeja). Lo que falla es solo la presentación del botón del otro lado.
+
+1. 10Button5_1 — juego completo de propiedades
+
+Ruta: conDashboard › conSolicitudes_1 › galApproval › rowSol_1 › 10Button5_1 (Classic/Button)
+
+Propiedad	Fórmula
+Visible	=true
+Text	="Approve"
+DisplayMode	=If(varEsAdmin; DisplayMode.Edit; DisplayMode.Disabled)
+Fill	=If(varEsAdmin; clrPeligro; clrSuperficie2)
+Color	=If(varEsAdmin; Color.White; clrTexto3)
+BorderColor	=If(varEsAdmin; clrPeligro; clrBordeFuerte)
+HoverFill	=ColorValue("#8F1E17")
+PressedFill	=ColorValue("#6E1712")
+Tooltip	=If(varEsAdmin; "Approve project"; "Only corporate leadership can approve")
+
+Visible = true a propósito: galApproval.Items ya filtra Status.Value = "Site Verification", así que toda fila de esa galería está pendiente por definición. Poner otra condición de estatus encima es exactamente lo que causó este bug. Menos comparaciones, menos puntos de falla.
+
+Y en el OnSelect, revisa esta línea (debe decir el nombre nuevo):
+
+StatusFrom: {Value: "Site Verification"};
+
+Si prefieres el verde institucional en vez del rojo, cambia clrPeligro por clrVerde en Fill y BorderColor, y HoverFill a =clrVerdeOscuro.
+
+2. Barrido de textos viejos
+
+Usa el buscador de Studio (Ctrl+F) sobre "Site ops Validation" y "Pre-planning". Estos son los lugares donde casi seguro siguen:
+
+Ruta	Control	Propiedad	Corrección
+conKPIs › tarjPendientes	lblK5Val	Text	contar "Site Verification"
+conKPIs › tarjPendientes	lblK5Meta	Text	idem en el Sum
+galSol › rowSol	07lblRowEstado	Color	el Switch debe tener "Not Started" y "Site Verification"
+galApproval › rowSol_1	07lblRowEstado_1	Color	idem
+galSitesAprv-WC › rowSol_2	07lblRowEstado_2	Color	idem
+conNumb › Container4	Status01	Items	["Not Started"; "Site Verification"]
+conFiltros / _1 / _2	cmbFEstado*	Items	mismos dos valores
+galSites › cardEst_1	lblEstatusResumen	Text	lista de 7 estatus nuevos
+App	—	OnStart	Set(varEstadosPre; ["Not Started"; "Site Verification"])
+
+El Switch de color de estatus, para que quede uniforme en las tres galerías:
+
+=Switch(ThisItem.Status.Value;
+    "Not Started";        clrTexto3;
+    "Site Verification";  clrAdvertencia;
+    "Approved";           clrVerdeFg;
+    "Upload to Baysim";   clrSite;
+    "In progress";        clrSite;
+    "Payment initiated";  clrSite;
+    "Technically closed"; clrVerdeFg;
+    "Capitalized";        clrVerdeFg;
+    "Finished";           clrVerde;
+    clrTexto2
+)
+3. Bug visible en tu captura
+
+Remaining Budget: -€120.900 sale en verde. Un saldo sobregirado en verde es peligroso: nadie lo va a notar.
+
+conFiltros_1 › SALDORESTANTEO_1 (Label) · Color:
+
+=If(frSaldoFiltrado < 0; clrPeligro; clrVerdeFg)
+
+Aplica el punto 1 y prueba de inmediato: el botón debe salir rojo con "Approve", y al presionarlo el proyecto debe pasar a Approved, desaparecer de galApproval y aparecer en la pestaña Site. Si sigue saliendo "✓ Approved", es que alguna de las propiedades de la tabla quedó sin reemplazar — dime cuál y la reviso.
